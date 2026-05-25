@@ -297,6 +297,36 @@ function r(fm, fd, fy, tm, td, ty) {
   return { fromMonth: fm, fromDay: fd, fromYear: fy, toMonth: tm, toDay: td, toYear: ty }
 }
 
+// Approximate country centroid [lat, lng]. Doesn't need to be precise — just
+// close enough to put a pin on the right part of a world map. Covers every
+// country we have a hero photo for; missing entries fall back to (0, 0).
+const COUNTRY_CENTROIDS = {
+  'japan': [36, 138], 'portugal': [39.5, -8], 'italy': [42.5, 12.5], 'france': [46.5, 2.5],
+  'spain': [40, -4], 'iceland': [65, -18], 'morocco': [32, -6], 'greece': [39, 22],
+  'thailand': [15, 101], 'peru': [-10, -76], 'mexico': [23, -102], 'vietnam': [16, 108],
+  'new zealand': [-41, 174], 'india': [21, 78], 'australia': [-25, 134], 'canada': [56, -106],
+  'united states': [39, -98], 'germany': [51, 10], 'united kingdom': [54, -2], 'brazil': [-10, -55],
+  'argentina': [-35, -65], 'indonesia': [-2, 118], 'turkey': [39, 35], 'egypt': [27, 30],
+  'south africa': [-29, 25], 'kenya': [1, 38], 'norway': [62, 10], 'sweden': [63, 16],
+  'switzerland': [47, 8], 'austria': [47.5, 14], 'netherlands': [52, 5],
+  'united arab emirates': [24, 54], 'singapore': [1.3, 103.8], 'malaysia': [4, 102],
+  'nepal': [28, 84], 'maldives': [3.2, 73], 'sri lanka': [7.8, 80.7], 'china': [35, 105],
+  'south korea': [37, 128], 'ireland': [53, -8], 'hungary': [47, 19],
+  'czech republic': [49.8, 15.5], 'croatia': [45.5, 16], 'poland': [52, 19],
+  'russia': [62, 100], 'colombia': [4, -72], 'cuba': [22, -78], 'chile': [-30, -71],
+  'jordan': [31, 36], 'tanzania': [-6, 35], 'philippines': [12, 122], 'cambodia': [13, 105],
+  'denmark': [56, 10], 'finland': [64, 26], 'belgium': [50.5, 4.5], 'costa rica': [10, -84],
+  'ecuador': [-1.5, -78], 'bolivia': [-17, -65], 'uzbekistan': [41, 64], 'georgia': [42, 43.5],
+  'myanmar': [21, 96], 'taiwan': [23.5, 121], 'saudi arabia': [24, 45], 'qatar': [25, 51],
+  'seychelles': [-5, 55], 'mauritius': [-20, 57], 'namibia': [-22, 17], 'ethiopia': [9, 40],
+  'laos': [19, 102], 'pakistan': [30, 70], 'ghana': [8, -1], 'ukraine': [49, 32],
+  'romania': [46, 25], 'bulgaria': [43, 25], 'slovenia': [46, 15], 'panama': [9, -80],
+}
+
+function getCountryCentroid(country) {
+  return COUNTRY_CENTROIDS[country?.toLowerCase()] || [0, 0]
+}
+
 // FNV-1a string hash → 32-bit unsigned int. Used to seed the PRNG below so
 // mock prefs are deterministic per (travelerId, country) — refreshing the
 // page keeps the same co-planner profile.
@@ -774,7 +804,7 @@ function Home({ userName, trips, onNewTrip, onNewTraveler, onOpenTrip }) {
                 </div>
               </div>
               <div className="trip-card-img-wrap">
-                <div className="trip-card-img" style={{ backgroundImage: `url(${getCountryPhoto(t.country)})` }} />
+                <div className="trip-card-img" style={{ backgroundImage: `url(${getCountryPhoto((t.route && t.route[0]) || t.country)})` }} />
                 <div className="trip-card-img-fade" />
               </div>
             </button>
@@ -1087,7 +1117,16 @@ function NewTripWizard({
 }) {
   // Steps: 1 Country, 2 Counts, 3 Planners (skip if adults==1), 4 Length, 5 Dates, 6 Name
   const [step, setStep] = useState(1)
+  // Route stops: index 0 is the primary destination, indexes 1-4 are optional
+  // additional stops. Kept as raw input strings until validated in goNext.
+  const [routeStops, setRouteStops] = useState([''])
+  const [routeErrors, setRouteErrors] = useState([''])
+  // Canonical primary country, set after step 1 validates. Used for display
+  // in later steps ("How many travelers are going to Japan?") and as the
+  // default trip name.
   const [country, setCountry] = useState('')
+  // Full canonical route (length 1-5). Set alongside `country` after step 1.
+  const [route, setRoute] = useState([])
   const [adults, setAdults] = useState(1)
   const [children, setChildren] = useState(0)
   const [infants, setInfants] = useState(0)
@@ -1098,7 +1137,6 @@ function NewTripWizard({
   const [dateRanges, setDateRanges] = useState([makeDefaultRange()])
   const [tripName, setTripName] = useState('')
   const [showModal, setShowModal] = useState(false)
-  const [countryError, setCountryError] = useState('')
 
   const totalSteps = adults > 1 ? 6 : 5
   const visibleStep = step > 3 && adults === 1 ? step - 1 : step
@@ -1107,13 +1145,19 @@ function NewTripWizard({
 
   const goNext = () => {
     if (step === 1) {
-      const canonical = lookupCountry(country)
-      if (!canonical) {
-        setCountryError('Please enter the name of a country (e.g. Japan, India, Brazil).')
+      const result = validateRouteInputs(routeStops)
+      if (!result.ok) {
+        setRouteErrors(result.errors)
         return
       }
-      setCountry(canonical)
-      setCountryError('')
+      // Canonicalise the input fields so the user sees the proper-cased names
+      // if they navigate back to this step later.
+      const filled = result.route.slice()
+      while (filled.length < routeStops.length) filled.push('')
+      setRouteStops(filled.slice(0, Math.max(result.route.length, 1)))
+      setRouteErrors(filled.map(() => ''))
+      setCountry(result.route[0])
+      setRoute(result.route)
       setStep(2)
       return
     }
@@ -1122,13 +1166,6 @@ function NewTripWizard({
     else if (step === 4 && lengthValue > 0) setStep(5)
     else if (step === 5) setStep(6)
     else if (step === 6) tryFinish()
-  }
-
-  const pickInspoCountry = (name) => {
-    const canonical = lookupCountry(name) || name
-    setCountry(canonical)
-    setCountryError('')
-    setStep(2)
   }
 
   const goBack = () => {
@@ -1149,8 +1186,10 @@ function NewTripWizard({
   }
 
   const finalize = () => {
+    const finalRoute = route.length > 0 ? route : [country.trim()].filter(Boolean)
     onFinish({
       country: country.trim(),
+      route: finalRoute,
       adults, children, infants,
       planners: selectedPlanners,
       dateRanges,
@@ -1178,49 +1217,24 @@ function NewTripWizard({
               <div className="dialogue">New trip? How exciting! Where would you like to go?</div>
             </div>
 
-            <div className="send-row">
-              <input
-                className={`input ${countryError ? 'input-error' : ''}`}
-                placeholder="e.g. Japan, India, Brazil…"
-                value={country}
-                onChange={(e) => { setCountry(e.target.value); setCountryError('') }}
-                onKeyDown={(e) => e.key === 'Enter' && country.trim() && goNext()}
-                autoFocus
-              />
-              <button
-                className="icon-btn primary"
-                disabled={!country.trim()}
-                style={!country.trim() ? { opacity: 0.4 } : {}}
-                onClick={() => country.trim() && goNext()}
-              >
-                <IconSend width={18} height={18} />
-              </button>
-            </div>
-
-            {countryError && (
-              <div className="country-error">
-                {countryError}
-              </div>
-            )}
-
-            <div className="tiny" style={{ marginTop: 24, marginBottom: 10 }}>Trending with your crew</div>
-            <div className="inspo-row">
-              {['Japan', 'Portugal', 'Morocco', 'Iceland'].map((c, i) => (
-                <button
-                  key={c}
-                  className="inspo-card"
-                  style={{
-                    background: ['var(--blush)', 'var(--sage)', 'var(--sky)', 'var(--sand)'][i],
-                    textAlign: 'left', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)',
-                  }}
-                  onClick={() => pickInspoCountry(c)}
-                >
-                  <span className="tag">Popular</span>
-                  <span className="place">{c}</span>
-                </button>
-              ))}
-            </div>
+            <RouteStopsRows
+              stops={routeStops}
+              setStops={setRouteStops}
+              errors={routeErrors}
+              setErrors={setRouteErrors}
+              primaryLabel="Primary destination"
+            />
           </div>
+
+          <button
+            className="fab-continue"
+            onClick={goNext}
+            aria-label="Continue"
+            disabled={!routeStops[0]?.trim()}
+            style={!routeStops[0]?.trim() ? { opacity: 0.4 } : {}}
+          >
+            <IconArrowRight width={22} height={22} />
+          </button>
         </div>
       )}
 
@@ -1507,6 +1521,201 @@ function CounterRow({ label, sub, value, setValue, min = 0 }) {
   )
 }
 
+// ---------- Route mini-map ----------
+// Visualises a trip's route on a stylised world map. Uses equirectangular
+// projection (lng → x, lat → y) so country pins land in the right rough part
+// of the world. Connection lines between successive stops convey the
+// route order at a glance. An "Edit Route" button opens the route editor.
+function RouteMiniMap({ route = [], onEdit }) {
+  const W = 400
+  const H = 200
+  const project = ([lat, lng]) => [
+    ((lng + 180) / 360) * W,
+    ((90 - lat) / 180) * H,
+  ]
+
+  // Coverage band: trim the far north/south so the visible band feels
+  // populated rather than mostly empty Arctic/Antarctic.
+  const TOP = H * 0.08   // ~75°N
+  const BOT = H * 0.92   // ~75°S
+
+  const pins = route
+    .filter(Boolean)
+    .map((c) => {
+      const [lat, lng] = getCountryCentroid(c)
+      // Skip pins with no centroid mapping rather than dropping them at (0,0).
+      if (lat === 0 && lng === 0) return null
+      return { country: c, xy: project([lat, lng]) }
+    })
+    .filter(Boolean)
+
+  return (
+    <div className="route-map-card">
+      <button className="route-edit-btn" onClick={onEdit}>Edit Route</button>
+      <svg
+        viewBox={`0 ${TOP} ${W} ${BOT - TOP}`}
+        className="route-map-svg"
+        preserveAspectRatio="xMidYMid meet"
+      >
+        {/* Latitude / longitude grid + equator — gives the card a cartographic
+            feel without us needing to draw real continent shapes. */}
+        <g className="route-map-grid">
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => (
+            <line key={`h${i}`} x1={0} y1={(i * H) / 10} x2={W} y2={(i * H) / 10} />
+          ))}
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((i) => (
+            <line key={`v${i}`} x1={(i * W) / 12} y1={TOP} x2={(i * W) / 12} y2={BOT} />
+          ))}
+          <line className="equator" x1={0} y1={H / 2} x2={W} y2={H / 2} />
+        </g>
+
+        {/* Route connection lines between consecutive stops. */}
+        {pins.length > 1 && (
+          <g className="route-map-lines">
+            {pins.slice(1).map((pin, i) => (
+              <line
+                key={i}
+                x1={pins[i].xy[0]} y1={pins[i].xy[1]}
+                x2={pin.xy[0]}     y2={pin.xy[1]}
+              />
+            ))}
+          </g>
+        )}
+
+        {/* Pins + labels. Order numbers help when stops cluster close. */}
+        {pins.map((pin, i) => {
+          // Flip the label below the pin if it would clip the top of the map.
+          const labelBelow = pin.xy[1] - TOP < 22
+          return (
+            <g key={i} transform={`translate(${pin.xy[0]} ${pin.xy[1]})`} className="route-map-pin">
+              <text
+                y={labelBelow ? 20 : -10}
+                textAnchor="middle"
+                className="route-map-label"
+              >
+                {pin.country}
+              </text>
+              <circle r={6} className="route-map-dot-outer" />
+              <circle r={3.2} className="route-map-dot-inner" />
+              {pins.length > 1 && (
+                <text y={1.2} textAnchor="middle" className="route-map-num">{i + 1}</text>
+              )}
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+// ---------- Route stops editor (reusable rows) ----------
+// Used both in step 1 of NewTripWizard and in the standalone Route Editor
+// screen. Renders a primary destination row plus up to 4 additional stops,
+// with a "+" button that appears at the bottom while there's still capacity.
+// Each row reports its own validation error inline.
+const ROUTE_MAX_STOPS = 5
+
+function RouteStopsRows({
+  stops,            // array of strings (raw input, not yet canonicalised)
+  setStops,         // setter
+  errors,           // array of error strings (parallel to stops; '' = no error)
+  setErrors,        // setter
+  primaryLabel = 'Primary destination',
+  allowRemovePrimary = false,
+}) {
+  const updateStop = (i, value) => {
+    setStops((arr) => arr.map((s, idx) => (idx === i ? value : s)))
+    if (errors[i]) setErrors((arr) => arr.map((e, idx) => (idx === i ? '' : e)))
+  }
+  const removeStop = (i) => {
+    setStops((arr) => arr.filter((_, idx) => idx !== i))
+    setErrors((arr) => arr.filter((_, idx) => idx !== i))
+  }
+  const addStop = () => {
+    if (stops.length >= ROUTE_MAX_STOPS) return
+    setStops((arr) => [...arr, ''])
+    setErrors((arr) => [...arr, ''])
+  }
+  const canAdd = stops.length < ROUTE_MAX_STOPS
+
+  return (
+    <div className="route-rows">
+      {stops.map((stop, i) => {
+        const isPrimary = i === 0
+        const canRemove = !isPrimary || allowRemovePrimary
+        return (
+          <div key={i} className="route-row">
+            <div className="route-row-label">
+              {isPrimary ? primaryLabel : `Stop ${i + 1}`}
+            </div>
+            <div className="route-row-input">
+              <input
+                className={`input ${errors[i] ? 'input-error' : ''}`}
+                placeholder="e.g. Japan, Portugal, Italy…"
+                value={stop}
+                onChange={(e) => updateStop(i, e.target.value)}
+              />
+              {canRemove && stops.length > 1 && (
+                <button
+                  className="route-remove-btn"
+                  onClick={() => removeStop(i)}
+                  aria-label={`Remove ${isPrimary ? 'primary destination' : `stop ${i + 1}`}`}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            {errors[i] && <div className="country-error">{errors[i]}</div>}
+          </div>
+        )
+      })}
+
+      {canAdd && (
+        <button className="route-add-btn" onClick={addStop} type="button">
+          <span className="plus-circle"><IconPlus width={16} height={16} /></span>
+          <span>Any other stops to add?</span>
+        </button>
+      )}
+      {!canAdd && (
+        <div className="route-max-hint">Maximum {ROUTE_MAX_STOPS} stops per trip.</div>
+      )}
+    </div>
+  )
+}
+
+// Validate a list of raw route inputs. Returns either { ok: true, route: [canonical names] }
+// or { ok: false, errors: [per-index error strings] }. The primary stop (index 0)
+// is required; additional stops are optional and skipped if blank.
+function validateRouteInputs(stops) {
+  const errors = stops.map(() => '')
+  const route = []
+  let ok = true
+  stops.forEach((raw, i) => {
+    const trimmed = (raw || '').trim()
+    if (!trimmed) {
+      if (i === 0) {
+        errors[i] = 'Please enter the name of a country (e.g. Japan, India, Brazil).'
+        ok = false
+      }
+      return
+    }
+    const canonical = lookupCountry(trimmed)
+    if (!canonical) {
+      errors[i] = 'Please enter the name of a country (e.g. Japan, India, Brazil).'
+      ok = false
+      return
+    }
+    if (route.some((c) => c.toLowerCase() === canonical.toLowerCase())) {
+      errors[i] = 'This stop is already in your route.'
+      ok = false
+      return
+    }
+    route.push(canonical)
+  })
+  if (ok) return { ok: true, route }
+  return { ok: false, errors }
+}
+
 // ---------- Travel Hub (shared) ----------
 function TravelHub({ trip, currentUserId, onBack, onOpenEditor, onOpenItinerary }) {
   const [tab, setTab] = useState('hub') // 'hub' | 'prefs'
@@ -1547,18 +1756,18 @@ function TravelHub({ trip, currentUserId, onBack, onOpenEditor, onOpenItinerary 
       </div>
 
       <div className="screen-scroll">
-        <div className="hub-header has-hero">
-          <div className="hub-hero" style={{ backgroundImage: `url(${getCountryPhoto(trip.country)})` }}>
-            <div className="hub-hero-fade" />
-          </div>
-          <div className="hub-header-body">
-            <div className="eyebrow">Trip</div>
-            <div className="hub-title">{trip.name}</div>
-            <div className="hub-sub">
-              {trip.country} · {formatTripLength(trip.tripLength)} · hosted by {host ? (host.id === currentUserId ? 'you' : host.name) : '—'}
-            </div>
+        <div className="hub-header">
+          <div className="eyebrow">Trip</div>
+          <div className="hub-title">{trip.name}</div>
+          <div className="hub-sub">
+            {formatTripLength(trip.tripLength)} · hosted by {host ? (host.id === currentUserId ? 'you' : host.name) : '—'}
           </div>
         </div>
+
+        <RouteMiniMap
+          route={trip.route && trip.route.length > 0 ? trip.route : [trip.country]}
+          onEdit={() => onOpenEditor('route')}
+        />
 
         <div className="hub-tabs">
           <button className={`hub-tab ${tab === 'hub' ? 'active' : ''}`} onClick={() => setTab('hub')}>Travel Hub</button>
@@ -1578,11 +1787,6 @@ function TravelHub({ trip, currentUserId, onBack, onOpenEditor, onOpenItinerary 
                 </div>
                 <div className="meta">
                   Best window across planners who've submitted preferences ({reco.count} of {reco.total} overlap).
-                </div>
-                <div className="bar">
-                  {Array.from({ length: reco.total }).map((_, i) => (
-                    <span key={i} className={`bar-seg ${i < reco.count ? 'on' : ''}`} />
-                  ))}
                 </div>
               </div>
             )}
@@ -2894,11 +3098,63 @@ function DestinationsEditor({ trip, initial, initialVotes, currentUserId, onBack
   )
 }
 
+// ---------- Route Editor screen ----------
+// Standalone editor reachable from the "Edit Route" button on the Travel Hub's
+// route mini-map. Edits all stops (including the primary one); saving updates
+// trip.route and trip.country, which also flows through to the trip card
+// thumbnail on the home screen via the route[0] → country sync.
+function RouteEditorScreen({ trip, onBack, onSave }) {
+  const initial = trip.route && trip.route.length > 0 ? trip.route : [trip.country]
+  const [stops, setStops]   = useState(initial)
+  const [errors, setErrors] = useState(initial.map(() => ''))
+
+  const handleSave = () => {
+    const result = validateRouteInputs(stops)
+    if (!result.ok) {
+      setErrors(result.errors)
+      return
+    }
+    onSave(result.route)
+  }
+
+  return (
+    <div className="screen screen-enter">
+      <div className="topbar">
+        <button className="back" onClick={onBack}><IconArrowLeft /></button>
+        <span className="step">Edit Route · {trip.name}</span>
+        <span style={{ width: 40 }} />
+      </div>
+      <div className="wizard">
+        <div className="scroll">
+          <div className="prompt-block" style={{ marginTop: 18 }}>
+            <div className="eyebrow">Route</div>
+            <div className="dialogue">Where is this trip headed?</div>
+          </div>
+          <div className="body" style={{ marginBottom: 14 }}>
+            Update the primary destination or add up to {ROUTE_MAX_STOPS - 1} more stops along the way.
+          </div>
+          <RouteStopsRows
+            stops={stops}
+            setStops={setStops}
+            errors={errors}
+            setErrors={setErrors}
+            primaryLabel="Primary destination"
+            allowRemovePrimary={false}
+          />
+        </div>
+        <button className="setup-btn" onClick={handleSave} disabled={!stops[0]?.trim()}>
+          Save route <IconCheck width={16} height={16} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ---------- Root App ----------
 const ME_ID = 'me'
 
 export default function App() {
-  const [route, setRoute] = useState('signup') // signup | tabs | newTraveler | newTrip | tripHub | itinerary | editDates | editBudget | editAccommodation | editDestinations
+  const [route, setRoute] = useState('signup') // signup | tabs | newTraveler | newTrip | tripHub | itinerary | editDates | editBudget | editAccommodation | editDestinations | editRoute
   const [activeTab, setActiveTab] = useState('home')
   const [userName, setUserName] = useState('')
   const [travelers, setTravelers] = useState(SEED_TRAVELERS)
@@ -2965,6 +3221,9 @@ export default function App() {
       id: `trip_${Date.now()}`,
       name: data.name,
       country: data.country,
+      // Full ordered route (1-5 stops). country mirrors route[0] so legacy
+      // reads still work without us refactoring every reference.
+      route: data.route && data.route.length > 0 ? data.route : [data.country],
       adults: data.adults,
       children: data.children,
       infants: data.infants,
@@ -3013,6 +3272,7 @@ export default function App() {
       id: `trip_${Date.now()}`,
       name: req.tripName,
       country: req.country,
+      route: req.route && req.route.length > 0 ? req.route : [req.country],
       adults: req.adults, children: req.children, infants: req.infants,
       tripLength: req.tripLength,
       planners: [req.host, ...req.otherCoPlanners, mePlanner],
@@ -3061,6 +3321,20 @@ export default function App() {
     else if (kind === 'budget') setRoute('editBudget')
     else if (kind === 'accommodation') setRoute('editAccommodation')
     else if (kind === 'destinations') setRoute('editDestinations')
+    else if (kind === 'route') setRoute('editRoute')
+  }
+
+  // Apply a new ordered route to the trip. country mirrors route[0] so the
+  // home-screen trip card thumbnail and any other country-keyed lookups stay
+  // in sync without us refactoring every consumer.
+  const updateTripRoute = (tripId, newRoute) => {
+    setTrips((all) =>
+      all.map((t) =>
+        t.id !== tripId ? t : { ...t, route: newRoute, country: newRoute[0] }
+      )
+    )
+    flashToast('Route updated')
+    setRoute('tripHub')
   }
 
   const requestsCount = incomingTravelers.length + incomingTrips.length
@@ -3160,6 +3434,14 @@ export default function App() {
             initial={selectedTrip.planners.find((p) => p.id === ME_ID)?.accommodation}
             onBack={() => setRoute('tripHub')}
             onSave={(accom) => updateMyField(selectedTrip.id, 'accommodation', accom, 'Accommodation saved')}
+          />
+        )}
+
+        {route === 'editRoute' && selectedTrip && (
+          <RouteEditorScreen
+            trip={selectedTrip}
+            onBack={() => setRoute('tripHub')}
+            onSave={(newRoute) => updateTripRoute(selectedTrip.id, newRoute)}
           />
         )}
 

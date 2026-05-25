@@ -1300,7 +1300,14 @@ body {
 
 /* Reco card */
 .reco-card {
-  background: linear-gradient(160deg, var(--sky) 0%, var(--cream-2) 100%);
+  /* Calendar-stencil background: a subtle SVG grid that suggests a wall
+     calendar without competing with the foreground text. */
+  background-color: var(--cream-2);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 140 140'><g fill='none' stroke='%234a4038' stroke-width='1.4' opacity='0.09'><rect x='14' y='28' width='112' height='98' rx='8'/><line x1='14' y1='50' x2='126' y2='50'/><line x1='38' y1='18' x2='38' y2='34'/><line x1='102' y1='18' x2='102' y2='34'/><line x1='14' y1='70' x2='126' y2='70'/><line x1='14' y1='90' x2='126' y2='90'/><line x1='14' y1='110' x2='126' y2='110'/><line x1='42' y1='50' x2='42' y2='126'/><line x1='70' y1='50' x2='70' y2='126'/><line x1='98' y1='50' x2='98' y2='126'/></g></svg>");
+  background-repeat: no-repeat;
+  background-position: right -18px center;
+  background-size: 170px 170px;
+  border: 1.5px solid var(--line);
   border-radius: var(--radius-lg);
   padding: 22px;
   margin-bottom: 14px;
@@ -1328,18 +1335,6 @@ body {
   margin-top: 8px;
   line-height: 1.4;
 }
-.reco-card .bar {
-  display: flex;
-  gap: 4px;
-  margin-top: 12px;
-}
-.reco-card .bar-seg {
-  flex: 1;
-  height: 5px;
-  border-radius: 3px;
-  background: rgba(74,64,56,0.12);
-}
-.reco-card .bar-seg.on { background: var(--sage-deep); }
 
 /* Planner roster */
 .roster-card {
@@ -3062,4 +3057,169 @@ body {
   padding: 2px 8px;
   background: var(--cream-2);
   border-radius: 999px;
+}
+
+/* ---------- Route stops editor ---------- */
+.route-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 4px;
+}
+.route-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.route-row-label {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--terra);
+  font-weight: 700;
+}
+.route-row-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.route-row-input .input {
+  flex: 1;
+}
+.route-remove-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  background: var(--white-soft);
+  color: var(--ink-soft);
+  font-size: 20px;
+  line-height: 1;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.route-remove-btn:hover {
+  background: var(--blush);
+  color: var(--ink);
+  border-color: var(--blush);
+}
+.route-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--cream-2);
+  border: 1.5px dashed var(--line);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--ink);
+  text-align: left;
+  width: 100%;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.route-add-btn:hover {
+  background: var(--sage);
+  border-color: var(--sage-deep);
+}
+.route-add-btn .plus-circle {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--white-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--terra);
+}
+.route-max-hint {
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-style: italic;
+  padding: 4px 2px;
+}
+
+/* ---------- Route mini-map ---------- */
+.route-map-card {
+  position: relative;
+  background: linear-gradient(160deg, var(--cream-2) 0%, var(--sky) 100%);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  margin: 8px 0 14px;
+  overflow: hidden;
+}
+.route-edit-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: var(--white-soft);
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--terra);
+  cursor: pointer;
+  z-index: 2;
+  transition: background 0.12s ease;
+}
+.route-edit-btn:hover {
+  background: var(--blush);
+}
+.route-map-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 200px;
+}
+.route-map-grid line {
+  stroke: var(--ink);
+  stroke-width: 0.5;
+  opacity: 0.08;
+}
+.route-map-grid .equator {
+  stroke: var(--terra);
+  stroke-width: 0.7;
+  stroke-dasharray: 3 3;
+  opacity: 0.25;
+}
+.route-map-lines line {
+  stroke: var(--terra);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  opacity: 0.7;
+}
+.route-map-pin .route-map-dot-outer {
+  fill: var(--terra);
+  opacity: 0.95;
+}
+.route-map-pin .route-map-dot-inner {
+  fill: var(--cream);
+}
+.route-map-pin .route-map-num {
+  fill: var(--cream);
+  font-family: var(--font-sans);
+  font-size: 7px;
+  font-weight: 700;
+  pointer-events: none;
+}
+.route-map-label {
+  fill: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 9.5px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: var(--cream);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
 }
