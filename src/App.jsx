@@ -297,6 +297,102 @@ function r(fm, fd, fy, tm, td, ty) {
   return { fromMonth: fm, fromDay: fd, fromYear: fy, toMonth: tm, toDay: td, toYear: ty }
 }
 
+// FNV-1a string hash → 32-bit unsigned int. Used to seed the PRNG below so
+// mock prefs are deterministic per (travelerId, country) — refreshing the
+// page keeps the same co-planner profile.
+function hashSeed(str) {
+  let h = 2166136261
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
+// Tiny deterministic PRNG returning [0, 1). Lets us "randomly" pick prefs
+// without ever depending on Math.random (which would re-roll on every render).
+function makeRng(seed) {
+  let s = seed >>> 0
+  return () => {
+    s = (s + 0x6D2B79F5) >>> 0
+    let t = Math.imul(s ^ (s >>> 15), 1 | s)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+// Shift a date range by N days, letting JS Date handle month/year rollovers.
+function shiftRangeByDays(range, days) {
+  if (!range) return null
+  const from = new Date(range.fromYear, range.fromMonth, range.fromDay)
+  const to   = new Date(range.toYear,   range.toMonth,   range.toDay)
+  from.setDate(from.getDate() + days)
+  to.setDate(to.getDate() + days)
+  return {
+    fromMonth: from.getMonth(), fromDay: from.getDate(), fromYear: from.getFullYear(),
+    toMonth:   to.getMonth(),   toDay:   to.getDate(),   toYear:   to.getFullYear(),
+  }
+}
+
+// Build mock preferences for a co-planner so the Travel Optimizer has
+// realistic group data to aggregate the moment a trip is created — useful
+// for the prototype demo where friends won't actually fill these in.
+// Deterministic per (travelerId, country): same input → same profile.
+function generateMockCoPlannerPrefs({ travelerId, country, hostDateRange }) {
+  const rng = makeRng(hashSeed(`${travelerId}:${country}`))
+  const between = (lo, hi) => lo + Math.floor(rng() * (hi - lo + 1))
+
+  // Three loose personality buckets so co-planners look distinct in the
+  // budget range, accommodation insight, and rooms-to-book calculation.
+  const personalities = [
+    { budgetLo: 1500, budgetHi: 2200, costLo: 110, costHi: 170, types: ['hostel', 'airbnb'],   headcount: 1 },
+    { budgetLo: 2400, budgetHi: 3200, costLo: 170, costHi: 240, types: ['airbnb', 'boutique'], headcount: 2 },
+    { budgetLo: 3500, budgetHi: 4500, costLo: 260, costHi: 360, types: ['hotel',  'resort'],   headcount: 2 },
+  ]
+  const p = personalities[Math.floor(rng() * personalities.length)]
+
+  // Date prefs: shift the host's range by -3 to +5 days so the optimizer
+  // has overlap to work with rather than identical inputs.
+  const datePrefs = hostDateRange ? [shiftRangeByDays(hostDateRange, between(-3, 5))] : null
+
+  // Budget within the personality's band.
+  const budget = { value: between(p.budgetLo, p.budgetHi), currency: 'USD' }
+
+  // Accommodation: 1 or 2 types from the candidate list, plus a cost/night.
+  const types = p.types.length > 1 && rng() > 0.5 ? [p.types[0], p.types[1]] : [p.types[0]]
+  const accommodation = {
+    types,
+    headcount: p.headcount,
+    costPerNight: between(p.costLo, p.costHi),
+  }
+
+  // Must-visit + group votes drawn from this country's catalog so the swipe
+  // deck and Top Traveler Destinations have content to rank.
+  const catalog = getDestinationsForCountry(country)
+  const ids     = catalog.map((d) => d.id)
+  // Fisher-Yates shuffle with our deterministic RNG.
+  const shuffled = ids.slice()
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1))
+    ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+  }
+  const pickCount = Math.min(shuffled.length, between(3, 5))
+  const mustVisit = shuffled.slice(0, pickCount)
+  const remainder = shuffled.slice(pickCount)
+  const interestedCount = Math.min(remainder.length, between(2, 4))
+  const interested = remainder.slice(0, interestedCount)
+  const passedCount = Math.min(remainder.length - interestedCount, between(0, 2))
+  const passed = remainder.slice(interestedCount, interestedCount + passedCount)
+
+  return {
+    datePrefs,
+    budget,
+    accommodation,
+    mustVisit,
+    groupVotes: { interested, passed },
+  }
+}
+
 const avatarColors = ['avatar-blush', 'avatar-sky', 'avatar-sage', 'avatar-sand', 'avatar-terra']
 
 const PEAK_INFO = {
@@ -578,7 +674,7 @@ function SignUp({ onSignUp }) {
       <div className="signup">
         <div className="hero">
           <div className="logo-mark"><IconLeaf width={28} height={28} /></div>
-          <div className="app-name">Triply</div>
+          <div className="app-name">GatherUp</div>
           <div className="tag">Plan trips together, without the group-chat chaos.</div>
         </div>
 
@@ -834,7 +930,7 @@ function MeTab({ userName }) {
   return (
     <div className="screen-scroll">
       <div className="h1" style={{ paddingTop: 6 }}>Profile</div>
-      <div className="body" style={{ marginBottom: 20 }}>Your Triply account</div>
+      <div className="body" style={{ marginBottom: 20 }}>Your GatherUp account</div>
       <div className="traveler-card" style={{ padding: 16 }}>
         <div className="avatar avatar-terra" style={{ width: 56, height: 56, fontSize: 20 }}>
           {userName ? userName[0].toUpperCase() : 'T'}
@@ -2842,17 +2938,28 @@ export default function App() {
       mustVisit: [],
       groupVotes: { interested: [], passed: [] },
     }
+    // For the prototype demo: pre-fill each selected co-planner with realistic
+    // mock preferences so the Travel Optimizer has group data to aggregate
+    // without every tester having to fill in three sets of prefs by hand.
+    const hostDateRange = data.dateRanges?.[0] || null
     const coPlanners = travelers
       .filter((t) => data.planners.includes(t.id))
-      .map((t) => ({
-        id: t.id, name: t.name, handle: t.handle, color: t.color,
-        role: 'co-planner',
-        datePrefs: null,
-        budget: null,
-        accommodation: null,
-        mustVisit: [],
-        groupVotes: { interested: [], passed: [] },
-      }))
+      .map((t) => {
+        const mock = generateMockCoPlannerPrefs({
+          travelerId: t.id,
+          country: data.country,
+          hostDateRange,
+        })
+        return {
+          id: t.id, name: t.name, handle: t.handle, color: t.color,
+          role: 'co-planner',
+          datePrefs: mock.datePrefs,
+          budget: mock.budget,
+          accommodation: mock.accommodation,
+          mustVisit: mock.mustVisit,
+          groupVotes: mock.groupVotes,
+        }
+      })
 
     const trip = {
       id: `trip_${Date.now()}`,
